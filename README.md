@@ -8,9 +8,9 @@ Escrito en el lenguaje Python e incluye un documento Latex R Markdown (tambien e
 funcionamientos del programa
 
 por:
-  - Jeronimo Restrepo
-  - Gabriel
-  - Jose Miguel Sanchez
+  - Jeronimo Restrepo Giraldo
+  - Gabriel Atehortua Spoor
+  - Jose Miguel Sanchez Fernandez
 
 
 
