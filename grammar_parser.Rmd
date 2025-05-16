@@ -1,0 +1,994 @@
+---
+title: "Analizador Sintáctico para Gramáticas LL(1) y SLR(1)"
+author: "Proyecto Final de Lenguajes Formales y Compiladores"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+  pdf_document:
+    toc: true
+    number_sections: true
+    latex_engine: xelatex
+fontsize: 11pt
+lang: es
+---
+
+\newpage
+
+# Introducción
+
+Este documento presenta una explicación detallada de un analizador sintáctico para gramáticas LL(1) y SLR(1). El código implementa un sistema que permite:
+
+
+- Leer una gramática libre de contexto desde la entrada estándar
+- Determinar si la gramática es LL(1), SLR(1), ambas o ninguna
+- Analizar cadenas de entrada utilizando el método de análisis apropiado
+
+
+El proyecto se enfoca en dos importantes técnicas de análisis sintáctico:
+
+- Análisis descendente predictivo (LL(1))
+- Análisis ascendente (SLR(1))
+
+
+# Fundamentos Teóricos
+
+## Gramática LL(1)
+
+Una gramática LL(1) es un tipo de gramática libre de contexto que puede ser analizada mediante un analizador descendente predictivo con un símbolo de anticipación. El nombre "LL" se refiere a:
+
+- El primer "L": lectura de izquierda a derecha de la entrada
+- El segundo "L": derivación por la izquierda
+- "(1)": uso de 1 símbolo de anticipación
+
+
+Para que una gramática sea LL(1), debe cumplir las siguientes condiciones:
+
+- No tener recursión izquierda
+- No ser ambigua
+- No tener producciones con prefijos comunes
+- Para cualquier no terminal $A$ con producciones $A \rightarrow \alpha$ y $A \rightarrow \beta$, se debe cumplir que $\text{FIRST}(\alpha) \cap \text{FIRST}(\beta) = \emptyset$
+- Si $\varepsilon \in \text{FIRST}(\alpha)$, entonces $\text{FIRST}(\beta) \cap \text{FOLLOW}(A) = \emptyset$
+
+
+## Gramática SLR(1)
+
+Una gramática SLR(1) (Simple LR) es un tipo de gramática que puede ser analizada mediante un analizador ascendente utilizando un autómata LR(0) y conjuntos FOLLOW para la reducción. El nombre "SLR" se refiere a:
+
+- "S": Simple, una variante simplificada de LR
+- "LR": análisis de izquierda a derecha, derivación por la derecha
+- "(1)": uso de 1 símbolo de anticipación
+
+
+Las gramáticas SLR(1) son más poderosas que las LL(1), permitiendo:
+
+- Recursión izquierda
+- Algunas formas de ambigüedad controlada
+
+
+## Conjuntos FIRST y FOLLOW
+
+Para ambos tipos de análisis, es necesario calcular los conjuntos FIRST y FOLLOW:
+
+
+- $\text{FIRST}(X)$: conjunto de terminales que pueden aparecer al inicio de cualquier forma sentencial derivable de $X$
+- $\text{FOLLOW}(A)$: conjunto de terminales que pueden aparecer inmediatamente después de $A$ en alguna forma sentencial derivable de la gramática
+
+
+# Estructura del Código
+
+El código está organizado principalmente en torno a la clase \texttt{Grammar}, que implementa toda la funcionalidad necesaria para analizar gramáticas y cadenas. A continuación, se explican los componentes principales:
+
+## Clase Grammar
+
+### Constructor
+
+El constructor \texttt{\_\_init\_\_} inicializa la gramática a partir de las producciones proporcionadas:
+
+\begin{lstlisting}[language=Python, caption=Constructor de la clase Grammar]
+def __init__(self, productions):
+self.productions = productions
+self.nonterminals = set()
+self.terminals = set()
+
+# Extraer terminales y no terminales
+for nt, prods in self.productions.items():
+self.nonterminals.add(nt)
+for prod in prods:
+  for symbol in prod:
+      if symbol.isupper():
+          if symbol not in self.nonterminals:
+              self.nonterminals.add(symbol)
+      elif symbol != 'e':
+          self.terminals.add(symbol)
+
+# Añadir marcador de fin de entrada
+self.terminals.add('$')
+
+self.first_sets = {}
+self.follow_sets = {}
+self.compute_first_sets()
+self.compute_follow_sets()
+\end{lstlisting}
+
+El constructor realiza las siguientes tareas:
+
+- Almacena las producciones de la gramática
+- Identifica los símbolos terminales y no terminales
+
+  - Los no terminales se representan con letras mayúsculas
+  - Los terminales se representan con letras minúsculas
+  - 'e' representa $\varepsilon$ (cadena vacía)
+
+- Añade el símbolo de fin de entrada ('\$')
+- Inicializa los conjuntos FIRST y FOLLOW
+- Calcula los conjuntos FIRST y FOLLOW para todos los símbolos
+
+
+### Cálculo de Conjuntos FIRST
+
+El método \texttt{compute\_first\_sets} calcula los conjuntos FIRST para todos los símbolos de la gramática:
+
+\begin{lstlisting}[language=Python, caption=Cálculo de conjuntos FIRST]
+def compute_first_sets(self):
+"""Calcula los conjuntos FIRST para todos los no terminales y terminales"""
+
+# Inicializar conjuntos FIRST
+for nt in self.nonterminals:
+self.first_sets[nt] = set()
+
+# Inicializar conjuntos FIRST para terminales
+for t in self.terminals:
+self.first_sets[t] = {t}
+
+# Caso especial para epsilon
+self.first_sets['e'] = {'e'}
+
+# Calcular conjuntos FIRST
+changed = True
+while changed:
+changed = False
+for nt, prods in self.productions.items():
+  for prod in prods:
+      # Si la producción es epsilon, añadir epsilon a FIRST
+      if prod[0] == 'e':
+          if 'e' not in self.first_sets[nt]:
+              self.first_sets[nt].add('e')
+              changed = True
+          continue
+      
+# Para cada símbolo en la producción
+curr_idx = 0
+can_derive_epsilon = True
+
+while curr_idx < len(prod) and can_derive_epsilon:
+    symbol = prod[curr_idx]
+    can_derive_epsilon = False
+    
+# Si el símbolo es un terminal
+if not symbol.isupper():
+    if symbol != 'e':
+        if symbol not in self.first_sets[nt]:
+            self.first_sets[nt].add(symbol)
+            changed = True
+    break
+    
+# El símbolo es un no terminal
+# Añadir todos los terminales no-epsilon de FIRST(symbol) a FIRST(nt)
+for s in self.first_sets[symbol]:
+    if s != 'e' and s not in self.first_sets[nt]:
+        self.first_sets[nt].add(s)
+        changed = True
+    
+# Comprobar si el símbolo puede derivar epsilon
+if 'e' in self.first_sets[symbol]:
+    can_derive_epsilon = True
+    curr_idx += 1
+    
+# Si todos los símbolos pueden derivar epsilon, añadir epsilon a FIRST(nt)
+if curr_idx == len(prod) and can_derive_epsilon:
+    if 'e' not in self.first_sets[nt]:
+        self.first_sets[nt].add('e')
+        changed = True
+\end{lstlisting}
+
+El algoritmo para calcular los conjuntos FIRST sigue estas reglas:
+
+- Para cada terminal $t$, $\text{FIRST}(t) = \{t\}$
+- Para $\varepsilon$, $\text{FIRST}(\varepsilon) = \{\varepsilon\}$
+- Para cada no terminal $A$:
+
+  - Si $A \rightarrow \varepsilon$ es una producción, añadir $\varepsilon$ a $\text{FIRST}(A)$
+  - Si $A \rightarrow X_1 X_2 \ldots X_n$ es una producción:
+        
+  - Añadir $\text{FIRST}(X_1) - \{\varepsilon\}$ a $\text{FIRST}(A)$
+  - Si $\varepsilon \in \text{FIRST}(X_1)$, añadir $\text{FIRST}(X_2) - \{\varepsilon\}$ a $\text{FIRST}(A)$
+  - Continuar este proceso
+  - Si $\varepsilon \in \text{FIRST}(X_i)$ para todo $i$ de $1$ a $n$, añadir $\varepsilon$ a $\text{FIRST}(A)$
+      
+
+
+
+### FIRST de una Cadena
+
+El método \texttt{first\_of\_string} calcula el conjunto FIRST para una cadena de símbolos:
+
+\begin{lstlisting}[language=Python, caption=Cálculo de FIRST para una cadena]
+def first_of_string(self, string):
+"""Calcula el conjunto FIRST para una cadena de símbolos"""
+
+if not string or string[0] == 'e':
+return {'e'}
+
+result = set()
+curr_idx = 0
+can_derive_epsilon = True
+
+while curr_idx < len(string) and can_derive_epsilon:
+
+symbol = string[curr_idx]
+can_derive_epsilon = False
+
+# Añadir todos los terminales no-epsilon de FIRST(symbol) a result
+for s in self.first_sets[symbol]:
+  if s != 'e':
+      result.add(s)
+
+# Comprobar si el símbolo puede derivar epsilon
+if 'e' in self.first_sets[symbol]:
+  can_derive_epsilon = True
+  curr_idx += 1
+
+# Si todos los símbolos pueden derivar epsilon, añadir epsilon a result
+if curr_idx == len(string) and can_derive_epsilon:
+result.add('e')
+
+return result
+\end{lstlisting}
+
+Este método aplica las mismas reglas que para calcular FIRST de un no terminal, pero para una cadena de símbolos:
+
+- Si la cadena está vacía o es $\varepsilon$, devuelve $\{\varepsilon\}$
+- De lo contrario, añade $\text{FIRST}(X_1) - \{\varepsilon\}$ al resultado
+- Si $\varepsilon \in \text{FIRST}(X_1)$, añade $\text{FIRST}(X_2) - \{\varepsilon\}$ al resultado
+- Continúa este proceso
+- Si todos los símbolos pueden derivar $\varepsilon$, añade $\varepsilon$ al resultado
+
+
+### Cálculo de Conjuntos FOLLOW
+
+El método \texttt{compute\_follow\_sets} calcula los conjuntos FOLLOW para todos los no terminales:
+
+\begin{lstlisting}[language=Python, caption=Cálculo de conjuntos FOLLOW]
+def compute_follow_sets(self):
+"""Calcula los conjuntos FOLLOW para todos los no terminales"""
+
+# Inicializar conjuntos FOLLOW
+for nt in self.nonterminals:
+self.follow_sets[nt] = set()
+
+# El símbolo inicial tiene $ en su conjunto FOLLOW
+self.follow_sets['S'].add('$')
+
+# Calcular conjuntos FOLLOW
+changed = True
+while changed:
+
+changed = False
+for nt, prods in self.productions.items():
+  for prod in prods:
+      if prod[0] == 'e':  # Omitir producciones epsilon
+          continue
+      
+      # Procesar cada símbolo en la producción
+      for i, symbol in enumerate(prod):
+          if symbol in self.nonterminals:  # Solo nos interesan los no terminales
+              # Calcular conjunto FIRST del resto de la producción
+              beta = prod[i+1:] if i < len(prod) - 1 else ['e']
+              first_beta = self.first_of_string(beta)
+              
+              # Añadir todos los símbolos no-epsilon de FIRST(beta) a FOLLOW(symbol)
+              for s in first_beta:
+                  if s != 'e' and s not in self.follow_sets[symbol]:
+                      self.follow_sets[symbol].add(s)
+                      changed = True
+              
+              # Si epsilon está en FIRST(beta), añadir todo FOLLOW(nt) a FOLLOW(symbol)
+              if 'e' in first_beta:
+                  for s in self.follow_sets[nt]:
+                      if s not in self.follow_sets[symbol]:
+                          self.follow_sets[symbol].add(s)
+                          changed = True
+\end{lstlisting}
+
+El algoritmo para calcular los conjuntos FOLLOW sigue estas reglas:
+
+- Para el símbolo inicial $S$, añadir '\$' a $\text{FOLLOW}(S)$
+- Para cada producción $A \rightarrow \alpha B \beta$:
+
+  - Añadir $\text{FIRST}(\beta) - \{\varepsilon\}$ a $\text{FOLLOW}(B)$
+  - Si $\varepsilon \in \text{FIRST}(\beta)$, añadir $\text{FOLLOW}(A)$ a $\text{FOLLOW}(B)$
+
+- Para cada producción $A \rightarrow \alpha B$:
+
+  - Añadir $\text{FOLLOW}(A)$ a $\text{FOLLOW}(B)$
+
+
+
+## Análisis LL(1)
+
+### Verificación de Gramática LL(1)
+
+El método \texttt{check\_ll1} verifica si la gramática es LL(1):
+
+\begin{lstlisting}[language=Python, caption=Verificación de gramática LL(1)]
+def check_ll1(self):
+"""Verifica si la gramática es LL(1)"""
+
+# Crear tabla de análisis
+table = {}
+for nt in self.nonterminals:
+table[nt] = {}
+
+# Intentar llenar la tabla de análisis sin conflictos
+for nt, prods in self.productions.items():
+for i, prod in enumerate(prods):
+  first_prod = self.first_of_string(prod)
+  
+  # Para cada terminal en FIRST(prod)
+  for terminal in first_prod - {'e'}:
+      if terminal in table[nt]:
+          # Conflicto detectado
+          return False
+      table[nt][terminal] = i
+  
+  # Si epsilon está en FIRST(prod), añadir entradas para terminales en FOLLOW(nt)
+  if 'e' in first_prod:
+      for terminal in self.follow_sets[nt]:
+          if terminal in table[nt]:
+              # Conflicto detectado
+              return False
+          table[nt][terminal] = i
+
+# Verificar recursión izquierda
+for nt, prods in self.productions.items():
+for prod in prods:
+  if prod and prod[0] == nt:
+      return False  # Recursión izquierda detectada
+
+return True
+\end{lstlisting}
+
+Este método verifica:
+
+- Que no haya conflictos en la tabla de análisis LL(1)
+
+  - Para cada producción $A \rightarrow \alpha$, se asigna esta producción a las entradas $(A, a)$ de la tabla donde $a \in \text{FIRST}(\alpha)$
+  - Si $\varepsilon \in \text{FIRST}(\alpha)$, también se asigna esta producción a las entradas $(A, b)$ donde $b \in \text{FOLLOW}(A)$
+  - Si hay más de una producción asignada a la misma entrada, hay un conflicto
+
+- Que no haya recursión izquierda
+
+  - Una gramática con producción $A \rightarrow A\alpha$ tiene recursión izquierda
+
+
+
+### Análisis Sintáctico LL(1)
+
+El método \texttt{parse\_ll1} analiza una cadena utilizando el algoritmo LL(1):
+
+\begin{lstlisting}[language=Python, caption=Análisis sintáctico LL(1)]
+def parse_ll1(self, input_string):
+"""Analiza una cadena utilizando el algoritmo LL(1)"""
+
+# Crear tabla de análisis
+table = {}
+for nt in self.nonterminals:
+table[nt] = {}
+
+# Llenar la tabla de análisis
+for nt, prods in self.productions.items():
+for i, prod in enumerate(prods):
+  first_prod = self.first_of_string(prod)
+  
+  # Para cada terminal en FIRST(prod)
+  for terminal in first_prod - {'e'}:
+      table[nt][terminal] = (i, prod)
+  
+  # Si epsilon está en FIRST(prod), añadir entradas para terminales en FOLLOW(nt)
+  if 'e' in first_prod:
+      for terminal in self.follow_sets[nt]:
+          table[nt][terminal] = (i, prod)
+
+# Añadir marcador de fin si no está presente
+if input_string and input_string[-1] != '$':
+input_string = input_string + '$'
+elif not input_string:
+input_string = '$'
+
+# Inicializar pila con marcador de fin y símbolo inicial
+stack = ['$', 'S']
+position = 0
+
+# Comenzar análisis
+while stack:
+
+top = stack[-1]
+
+# Obtener símbolo actual de entrada
+current = input_string[position] if position < len(input_string) else '$'
+
+# Si el tope es un terminal
+if top not in self.nonterminals:
+  if top == current:
+      stack.pop()
+      position += 1
+      if top == '$' and position == len(input_string):
+          return True  # Análisis exitoso
+  else:
+      return False  # Discrepancia
+
+# El tope es un no terminal
+elif current in table[top]:
+  prod_idx, prod = table[top][current]
+  stack.pop()
+  
+  # Meter producción en orden inverso
+  if prod[0] != 'e':  # Omitir epsilon
+      for symbol in reversed(prod):
+          stack.append(symbol)
+else:
+  return False  # No se encontró producción
+
+return position == len(input_string)  # Debe haber consumido toda la entrada
+\end{lstlisting}
+
+El algoritmo de análisis LL(1) funciona de la siguiente manera:
+
+- Construye una tabla de análisis $M$ donde para cada entrada $M[A, a]$:
+
+  - Si $a \in \text{FIRST}(\alpha)$, entonces $M[A, a] = (A \rightarrow \alpha)$
+  - Si $\varepsilon \in \text{FIRST}(\alpha)$ y $a \in \text{FOLLOW}(A)$, entonces $M[A, a] = (A \rightarrow \alpha)$
+
+- Inicializa una pila con '\$' y el símbolo inicial 'S'
+- Mientras la pila no esté vacía:
+
+  - Sea $X$ el símbolo en el tope de la pila y $a$ el símbolo actual de entrada
+  - Si $X = a = \$$, aceptar
+  - Si $X = a \neq \$$, desapilar $X$ y avanzar en la entrada
+  - Si $X$ es no terminal, consultar $M[X, a]$:
+      
+  - Si $M[X, a] = (X \rightarrow Y_1 Y_2 \ldots Y_n)$:
+        
+    - Desapilar $X$
+    - Apilar $Y_n, Y_{n-1}, \ldots, Y_1$ (en ese orden)
+        
+  - Si $M[X, a]$ no está definido, hay un error de sintaxis
+
+
+
+
+## Análisis SLR(1)
+
+### Verificación de Gramática SLR(1)
+
+El método \texttt{check\_slr1} verifica si la gramática es SLR(1):
+
+\begin{lstlisting}[language=Python, caption=Verificación de gramática SLR(1)]
+def check_slr1(self):
+"""Verifica si la gramática es SLR(1)"""
+
+try:
+# Verificar recursión izquierda directa (aceptable para SLR(1) pero no para LL(1))
+left_recursive = False
+for nt, prods in self.productions.items():
+  for prod in prods:
+      if prod and prod[0] == nt:
+          left_recursive = True
+
+# Obtener gramática aumentada
+augmented_prods = self.productions.copy()
+augmented_prods["S'"] = [['S']]
+aug_grammar = Grammar(augmented_prods)
+
+# Obtener colección canónica de items LR(0)
+items = []  # Lista de conjuntos de items
+goto = {}  # Diccionario que mapea (state_idx, symbol) a state_idx
+
+# Inicializar con la clausura de {S' -> .S}
+initial_item = ("S'", 0, 0)  # (nonterminal, prod_idx, dot_position)
+initial_state = self._closure({initial_item}, augmented_prods)
+items.append(initial_state)
+
+# Construir la colección canónica
+i = 0
+while i < len(items):
+  state = items[i]
+  
+  # Encontrar símbolos después del punto en este estado
+  symbols = set()
+  for nt, prod_idx, dot_pos in state:
+      if dot_pos < len(augmented_prods[nt][prod_idx]):
+          symbols.add(augmented_prods[nt][prod_idx][dot_pos])
+  
+  # Procesar cada símbolo
+  for symbol in symbols:
+      # Obtener el siguiente estado usando GOTO
+      next_state = set()
+      for nt, prod_idx, dot_pos in state:
+          if (dot_pos < len(augmented_prods[nt][prod_idx]) and 
+              augmented_prods[nt][prod_idx][dot_pos] == symbol):
+              next_state.add((nt, prod_idx, dot_pos + 1))
+      
+  # Obtener clausura del siguiente estado
+      next_state = self._closure(next_state, augmented_prods)
+      
+  # Añadir next_state a items si es nuevo
+  if next_state:
+      if next_state not in items:
+          items.append(next_state)
+          goto[(i, symbol)] = len(items) - 1
+      else:
+          goto[(i, symbol)] = items.index(next_state)
+  
+  i += 1
+
+# Crear tabla de análisis
+action = {}
+for i in range(len(items)):
+  action[i] = {}
+
+# Configurar acciones de desplazamiento y goto
+for (state_idx, symbol), next_state in goto.items():
+  if symbol in self.terminals:
+      action[state_idx][symbol] = ('shift', next_state)
+
+# Configurar acciones de reducción
+for i, state in enumerate(items):
+  for nt, prod_idx, dot_pos in state:
+      # Si el item es [A -> α.] (punto al final), añadir acción de reducción
+      if nt != "S'" and dot_pos == len(augmented_prods[nt][prod_idx]):
+          for terminal in self.follow_sets[nt]:
+              # Verificar conflictos
+              if terminal in action[i]:
+                  return False  # Conflicto detectado
+              action[i][terminal] = ('reduce', (nt, prod_idx))
+      
+  # Si el item es [S' -> S.], añadir acción de aceptación
+  if nt == "S'" and dot_pos == 1:
+      action[i]['$'] = ('accept', None)
+
+return True
+
+except:
+return False
+\end{lstlisting}
+
+Este método verifica si la gramática es SLR(1) mediante:
+
+- Construcción de la gramática aumentada (añadiendo $S' \rightarrow S$)
+- Construcción de la colección canónica de conjuntos de items LR(0)
+- Construcción de las tablas de acción y goto
+- Verificación de conflictos desplazamiento/reducción o reducción/reducción
+
+
+### Clausura de Items LR(0)
+
+El método \texttt{\_closure} calcula la clausura de un conjunto de items LR(0):
+
+\begin{lstlisting}[language=Python, caption=Cálculo de clausura de items LR(0)]
+def _closure(self, items, augmented_prods):
+"""Calcula la clausura de un conjunto de items LR(0)"""
+result = set(items)
+
+changed = True
+while changed:
+changed = False
+new_items = set()
+
+for nt, prod_idx, dot_pos in result:
+  # Si el punto está antes de un no terminal
+  if dot_pos < len(augmented_prods[nt][prod_idx]):
+      next_symbol = augmented_prods[nt][prod_idx][dot_pos]
+      if next_symbol in self.nonterminals or next_symbol == "S'":
+          # Añadir producciones de este no terminal a la clausura
+          for i, prod in enumerate(augmented_prods[next_symbol]):
+              new_item = (next_symbol, i, 0)
+              if new_item not in result:
+                  new_items.add(new_item)
+                  changed = True
+
+result.update(new_items)
+
+return result
+\end{lstlisting}
+
+La clausura de un conjunto de items LR(0) se calcula así:
+
+  - Para cada item $[A \rightarrow \alpha . B \beta]$ en el conjunto:
+  
+  - Para cada producción $B \rightarrow \gamma$, añadir el item $[B \rightarrow . \gamma]$ a la clausura
+  
+  - Repetir hasta que no se añadan nuevos items
+
+
+### Análisis Sintáctico SLR(1)
+
+El método \texttt{parse\_slr1} analiza una cadena utilizando el algoritmo SLR(1):
+
+\begin{lstlisting}[language=Python, caption=Análisis sintáctico SLR(1)]
+def parse_slr1(self, input_string):
+"""Analiza una cadena utilizando el algoritmo SLR(1)"""
+try:
+# Obtener gramática aumentada
+augmented_prods = self.productions.copy()
+augmented_prods["S'"] = [['S']]
+aug_grammar = Grammar(augmented_prods)
+
+# Obtener colección canónica
+items = []
+goto = {}
+
+# Inicializar con la clausura de {S' -> .S}
+initial_item = ("S'", 0, 0)
+initial_state = self._closure({initial_item}, augmented_prods)
+items.append(initial_state)
+
+# Construir la colección canónica
+i = 0
+while i < len(items):
+  
+  state = items[i]
+  
+  # Encontrar símbolos después del punto en este estado
+  symbols = set()
+  for nt, prod_idx, dot_pos in state:
+      if dot_pos < len(augmented_prods[nt][prod_idx]):
+          symbols.add(augmented_prods[nt][prod_idx][dot_pos])
+  
+  # Procesar cada símbolo
+  for symbol in symbols:
+      # Obtener el siguiente estado usando GOTO
+      next_state = set()
+      for nt, prod_idx, dot_pos in state:
+          if (dot_pos < len(augmented_prods[nt][prod_idx]) and 
+              augmented_prods[nt][prod_idx][dot_pos] == symbol):
+              next_state.add((nt, prod_idx, dot_pos + 1))
+      
+  # Obtener clausura del siguiente estado
+  next_state = self._closure(next_state, augmented_prods)
+  
+  # Añadir next_state a items si es nuevo
+  if next_state:
+      if next_state not in items:
+          items.append(next_state)
+          goto[(i, symbol)] = len(items) - 1
+      else:
+          goto[(i, symbol)] = items.index(next_state)
+  
+  i += 1
+
+# Crear tabla de análisis
+action = {}
+goto_table = {}
+for i in range(len(items)):
+  action[i] = {}
+  goto_table[i] = {}
+
+# Configurar acciones de desplazamiento y goto
+for (state_idx, symbol), next_state in goto.items():
+  if symbol in self.terminals:
+      action[state_idx][symbol] = ('shift', next_state)
+  else:
+      goto_table[state_idx][symbol] = next_state
+
+# Configurar acciones de reducción
+for i, state in enumerate(items):
+  for nt, prod_idx, dot_pos in state:
+  # Si el item es [A -> α.] (punto al final), añadir acción de reducción
+  if nt != "S'" and dot_pos == len(augmented_prods[nt][prod_idx]):
+      for terminal in self.follow_sets[nt]:
+          action[i][terminal] = ('reduce', (nt, prod_idx))
+      
+  # Si el item es [S' -> S.], añadir acción de aceptación
+  if nt == "S'" and dot_pos == 1:
+      action[i]['] = ('accept', None)
+
+# Añadir marcador de fin si no está presente
+if input_string and input_string[-1] != ':
+  input_string = input_string + '
+elif not input_string:
+  input_string = '
+
+# Analizar entrada
+stack = [0]  # Comenzar con el estado 0
+position = 0
+
+while True:
+  
+  current_state = stack[-1]
+  current_symbol = input_string[position] if position < len(input_string) else '
+  
+  if current_symbol in action[current_state]:
+      act, value = action[current_state][current_symbol]
+      
+  if act == 'shift':
+      stack.append(current_symbol)  # Apilar símbolo
+      stack.append(value)  # Apilar siguiente estado
+      position += 1
+  elif act == 'reduce':
+      nt, prod_idx = value
+      prod = augmented_prods[nt][prod_idx]
+      
+  # Desapilar 2 * len(prod) elementos (símbolo y estado para cada símbolo)
+  if prod[0] != 'e':  # No desapilar para producción epsilon
+      stack = stack[:-2*len(prod)]
+      
+  # Obtener estado actual después de desapilar
+  current_state = stack[-1]
+      
+  # Apilar no terminal y estado goto
+  stack.append(nt)
+  stack.append(goto_table[current_state][nt])
+  elif act == 'accept':
+      return True
+  else:
+      return False
+
+except Exception as e:
+return False
+\end{lstlisting}
+
+El algoritmo de análisis SLR(1) funciona de la siguiente manera:
+
+- Construye las tablas de acción y goto:
+
+  - Para cada estado $I$ con item $[A \rightarrow \alpha . a \beta]$ donde $a$ es un terminal, $\text{ACTION}[I, a] = \text{shift } j$ donde $j = \text{GOTO}(I, a)$
+  - Para cada estado $I$ con item $[A \rightarrow \alpha .]$ donde $A \neq S'$, $\text{ACTION}[I, a] = \text{reduce } A \rightarrow \alpha$ para todo $a \in \text{FOLLOW}(A)$
+  - Para el estado $I$ con item $[S' \rightarrow S.]$, $\text{ACTION}[I, \$] = \text{accept}$
+
+- Inicializa la pila con el estado inicial $0$
+- Mientras no se acepte:
+
+- Sea $s$ el estado en el tope de la pila y $a$ el símbolo actual
+- Si $\text{ACTION}[s, a] = \text{shift } t$:
+      
+  - Apilar $a$ y $t$
+  - Avanzar al siguiente símbolo
+      
+- Si $\text{ACTION}[s, a] = \text{reduce } A \rightarrow \beta$:
+      
+  - Desapilar $2 \times |\beta|$ elementos
+  - Sea $t$ el estado ahora en el tope de la pila
+  - Apilar $A$ y $\text{GOTO}[t, A]$
+      
+- Si $\text{ACTION}[s, a] = \text{accept}$:
+      
+  - Aceptar
+      
+  - De lo contrario, hay un error
+
+
+
+# Funciones Auxiliares
+
+## Lectura de la Gramática
+
+La función \texttt{parse\_grammar} lee una gramática desde la entrada del usuario:
+
+\begin{lstlisting}[language=Python, caption=Lectura de la gramática]
+def parse_grammar():
+"""Lee una gramática desde la entrada del usuario"""
+
+productions = {}
+
+# Leer número de no terminales
+while True:
+
+try:
+  n = int(input())
+  if n <= 0:
+      raise ValueError
+  break
+except ValueError:
+  print("Por favor, introduzca un entero positivo para el número de líneas de producción de la gramática.")
+
+print(f"Introduzca {n} producciones (una por línea) en el formato: Use A -> B C (SLR(1)) o A -> a | b (LL(1)).")
+for _ in range(n):
+line = input().strip()
+parts = line.split(' -> ')
+nt = parts[0]
+rules = parts[1].split()
+
+if nt not in productions:
+  productions[nt] = []
+
+for rule in rules:
+  productions[nt].append(list(rule))
+
+return Grammar(productions)
+\end{lstlisting}
+
+Este método:
+
+- Solicita al usuario el número de líneas de producción
+- Lee las producciones una por una
+- Convierte las producciones al formato interno: cada producción es una lista de símbolos
+- Crea y devuelve un objeto \texttt{Grammar}
+
+
+## Análisis de Cadenas
+
+La función \texttt{parse\_strings} analiza cadenas utilizando el analizador especificado:
+
+\begin{lstlisting}[language=Python, caption=Análisis de cadenas]
+def parse_strings(grammar, parser_type):
+"""Analiza cadenas utilizando el analizador especificado"""
+
+while True:
+
+string = input().strip()
+if not string:
+  break
+
+if parser_type == 'LL1':
+  result = grammar.parse_ll1(string)
+else:  # SLR1
+  result = grammar.parse_slr1(string)
+
+print("yes" if result else "no")
+\end{lstlisting}
+
+Este método:
+
+- Lee cadenas de entrada del usuario
+- Utiliza el analizador apropiado (LL(1) o SLR(1)) para analizar cada cadena
+- Muestra "yes" si la cadena es aceptada, o "no" en caso contrario
+- Termina cuando se introduce una cadena vacía
+
+
+## Función Principal
+
+La función \texttt{main} orquesta el proceso completo:
+
+\begin{lstlisting}[language=Python, caption=Función principal]
+def main():
+"""Función principal"""
+
+grammar = parse_grammar()
+
+# Verificar si la gramática es LL(1) y/o SLR(1)
+is_ll1 = grammar.check_ll1()
+is_slr1 = grammar.check_slr1()
+
+if is_ll1 and is_slr1:
+print("Seleccione un analizador (T: para LL(1), B: para SLR(1), Q: salir):")
+
+while True:
+  
+  choice = input().upper().strip()
+  if choice == 'T':
+      parse_strings(grammar, 'LL1')
+      print("Seleccione un analizador (T: para LL(1), B: para SLR(1), Q: salir):")
+  elif choice == 'B':
+      parse_strings(grammar, 'SLR1')
+      print("Seleccione un analizador (T: para LL(1), B: para SLR(1), Q: salir):")
+  elif choice == 'Q':
+      print("Saliendo...")
+      break
+  
+elif is_ll1:
+print("La gramática es LL(1).")
+parse_strings(grammar, 'LL1')
+elif is_slr1:
+print("La gramática es SLR(1).")
+parse_strings(grammar, 'SLR1')
+else:
+print("La gramática no es ni LL(1) ni SLR(1).\nSaliendo...")
+\end{lstlisting}
+
+Este método:
+
+- Llama a \texttt{parse\_grammar} para leer la gramática
+- Verifica si la gramática es LL(1) y/o SLR(1)
+- Según el resultado:
+
+  - Si es ambos, permite al usuario elegir el analizador
+  - Si es solo uno, utiliza ese analizador
+  - Si no es ninguno, muestra un mensaje y termina
+
+
+
+# Ejemplos de Uso
+
+## Ejemplo 1: Gramática LL(1)
+
+Consideremos la siguiente gramática:
+
+\begin{align*}
+S &\rightarrow aAB \\
+A &\rightarrow bA \mid \varepsilon \\
+B &\rightarrow cB \mid d
+\end{align*}
+
+Esta gramática es LL(1) porque:
+
+- No tiene recursión izquierda
+- No hay ambigüedad
+- No hay conflictos en la tabla de análisis LL(1)
+
+
+Para analizar esta gramática con nuestro programa:
+
+\begin{verbatim}
+3
+S -> aAB
+A -> bA e
+B -> cB d
+\end{verbatim}
+
+El programa determinará que es LL(1) y nos permitirá analizar cadenas como:
+
+- \texttt{abd} (aceptada)
+- \texttt{abbbd} (aceptada)
+- \texttt{abcd} (aceptada)
+- \texttt{abbc} (rechazada)
+
+
+## Ejemplo 2: Gramática SLR(1) pero no LL(1)
+
+Consideremos la siguiente gramática:
+
+\begin{align*}
+S &\rightarrow Sa \mid b
+\end{align*}
+
+Esta gramática no es LL(1) debido a la recursión izquierda, pero es SLR(1).
+
+Para analizar esta gramática con nuestro programa:
+
+\begin{verbatim}
+1
+S -> Sa b
+\end{verbatim}
+
+El programa determinará que es SLR(1) pero no LL(1), y nos permitirá analizar cadenas como:
+
+- \texttt{b} (aceptada)
+- \texttt{ba} (aceptada)
+- \texttt{baa} (aceptada)
+- \texttt{bb} (rechazada)
+
+
+# Conclusiones
+
+El analizador sintáctico implementado proporciona:
+
+
+- Verificación automática de si una gramática es LL(1) y/o SLR(1)
+- Análisis de cadenas utilizando el algoritmo apropiado
+- Un enfoque tecnico para entender los conceptos teóricos de análisis sintáctico
+
+
+Algunas observaciones importantes:
+
+
+- Las gramáticas LL(1) son un subconjunto de las gramáticas SLR(1)
+- El análisis LL(1) es descendente, mientras que el SLR(1) es ascendente
+- El análisis SLR(1) puede manejar recursión izquierda, mientras que el LL(1) no
+- Ambos tipos de análisis tienen complejidad lineal en el tamaño de la entrada
+
+
+Este analizador puede ser utilizado como herramienta para:
+
+- Entender los algoritmos de análisis sintáctico
+- Experimentar con diferentes gramáticas
+- Derivar distintas expresiones con los analizadores LL(1) y SLR(1)
+
+
+# Referencias
+
+  - Alfred V. Aho - Compiladores. Principios, técnicas y herramientas - Addison Wesley Longman (2000).
+  - John E. Hopcroft - Teoría de autómatas, lenguajes y computación - Pearson Educación (2008).
+  - Dexter C. Kozen - Automata and Computability.
