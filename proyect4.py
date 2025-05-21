@@ -558,9 +558,11 @@ def main():
             
             choice = input().upper().strip()
             if choice == 'T':
+                print("Parser is LL(1):  ")
                 parse_strings(grammar, 'LL1')
                 print("Select a parser (T: for LL(1), B: for SLR(1), Q: quit):")
             elif choice == 'B':
+                print("Parser is SLR(1):  ")
                 parse_strings(grammar, 'SLR1')
                 print("Select a parser (T: for LL(1), B: for SLR(1), Q: quit):")
             elif choice == 'Q':
